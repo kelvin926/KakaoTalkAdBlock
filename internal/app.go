@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"kakaotalkadblock/internal/beta"
 	"kakaotalkadblock/internal/win/winapi"
@@ -15,93 +14,91 @@ import (
 )
 
 const sleepTime = 100 * time.Millisecond
+const discoveryInterval = 2 * time.Second
 const executable = "kakaotalk.exe"
 
-var mutex = &sync.Mutex{}
+var mutex sync.Mutex
 var mainWindowHandleMap = make(map[windows.HWND]struct{})
 var adSubwindowCandidateMap = make(map[windows.HWND]struct{})
-var windowTextMap = make(map[windows.HWND]string)
-var windowClassMap = make(map[windows.HWND]string)
-var enumWindowCallbackMap = make(map[windows.HWND]uintptr)
-var customScrollHandleMap = make(map[windows.HWND]bool)
 
-func uint8ToStr(arr []uint8) string {
-	n := bytes.Index(arr, []uint8{0})
-
-	return string(arr[:n])
+// Each snapshot is owned by this call, including empty/failed enumerations.
+func kakaoProcessIDs() map[uint32]struct{} {
+	ids := make(map[uint32]struct{})
+	snapshot := winapi.CreateToolhelp32Snapshot(winapi.Th32csSnapprocess, 0)
+	if snapshot == 0 || snapshot == windows.InvalidHandle {
+		return ids
+	}
+	defer windows.CloseHandle(snapshot)
+	var entry winapi.ProcessEntry32
+	entry.DwSize = uint32(unsafe.Sizeof(entry))
+	if !winapi.Process32First(uintptr(snapshot), &entry) {
+		return ids
+	}
+	for {
+		name := windows.ByteSliceToString(entry.SzExeFile[:])
+		if strings.EqualFold(name, executable) || beta.IsExecutable(name) {
+			ids[entry.Th32ProcessID] = struct{}{}
+		}
+		if !winapi.Process32Next(uintptr(snapshot), &entry) {
+			break
+		}
+	}
+	return ids
 }
 
 func watch(ctx context.Context) {
-	var (
-		pe32      winapi.ProcessEntry32
-		szExeFile string
-	)
-	pe32.DwSize = uint32(unsafe.Sizeof(pe32))
-	lastFoundAt := time.Now().Unix() - 2
-	var snapshot windows.HWND
-	var enumWindow = syscall.NewCallback(func(handle windows.HWND, processId uintptr) uintptr {
-		winapi.GetWindowThreadProcessId(handle, &pe32.Th32ProcessID)
-		if processId == uintptr(pe32.Th32ProcessID) {
-			lastFoundAt = time.Now().Unix()
-			className := winapi.GetClassName(handle)
-			parentHandle := winapi.GetParent(handle)
-			beta.TrackWindow(handle, className, parentHandle)
-			if className == "EVA_Window_Dblclk" || className == "EVA_Window" {
-				windowText := winapi.GetWindowText(handle)
-
-				switch className {
-				case "EVA_Window_Dblclk":
-					if windowText != "" && parentHandle == 0 {
-						mainWindowHandleMap[handle] = struct{}{}
-					} else if windowText == "" && parentHandle != 0 {
-						if _, ok := mainWindowHandleMap[parentHandle]; ok {
-							adSubwindowCandidateMap[handle] = struct{}{}
-						}
-					}
-				case "EVA_Window":
-					if windowText == "" && parentHandle == 0 {
-						adSubwindowCandidateMap[handle] = struct{}{}
-					}
+	var processIDs map[uint32]struct{}
+	var nextMain, nextAds map[windows.HWND]struct{}
+	// One callback per watcher, never one per window or polling iteration.
+	enumWindow := syscall.NewCallback(func(handle windows.HWND, _ uintptr) uintptr {
+		var pid uint32
+		winapi.GetWindowThreadProcessId(handle, &pid)
+		if _, ok := processIDs[pid]; !ok {
+			return 1
+		}
+		className := winapi.GetClassName(handle)
+		parentHandle := winapi.GetParent(handle)
+		beta.TrackWindow(handle, className, parentHandle)
+		if className == "EVA_Window_Dblclk" || className == "EVA_Window" {
+			windowText := winapi.GetWindowText(handle)
+			if className == "EVA_Window_Dblclk" && windowText != "" && parentHandle == 0 {
+				nextMain[handle] = struct{}{}
+			} else if windowText == "" {
+				if className == "EVA_Window" && parentHandle == 0 {
+					nextAds[handle] = struct{}{}
+				} else if _, ok := nextMain[parentHandle]; ok {
+					nextAds[handle] = struct{}{}
 				}
 			}
 		}
 		return 1
 	})
-	ticker := time.NewTicker(sleepTime)
+	ticker := time.NewTicker(discoveryInterval)
 	defer ticker.Stop()
-
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		processIDs = kakaoProcessIDs()
+		nextMain = make(map[windows.HWND]struct{})
+		nextAds = make(map[windows.HWND]struct{})
+		if len(processIDs) != 0 {
+			winapi.EnumWindows(enumWindow, 0)
+		}
+		mutex.Lock()
+		// Replace sets so closed windows and reused HWNDs do not accumulate.
+		mainWindowHandleMap, adSubwindowCandidateMap = nextMain, nextAds
+		mutex.Unlock()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			mutex.Lock()
-			if lastFoundAt < time.Now().Unix()-1 {
-				snapshot = winapi.CreateToolhelp32Snapshot(winapi.Th32csSnapprocess, 0)
-				lastFoundAt = time.Now().Unix()
-			}
-			if winapi.Process32First(uintptr(snapshot), &pe32) {
-				for {
-					szExeFile = uint8ToStr(pe32.SzExeFile[:])
-
-					if strings.ToLower(szExeFile) == executable || beta.IsExecutable(szExeFile) {
-						winapi.EnumWindows(enumWindow, uintptr(pe32.Th32ProcessID))
-					}
-
-					if !winapi.Process32Next(uintptr(snapshot), &pe32) {
-						break
-					}
-				}
-			}
-			mutex.Unlock()
 		}
 	}
 }
 
 func removeAd(ctx context.Context) {
-	childHandles := make([]windows.HWND, 0)
 	ticker := time.NewTicker(sleepTime)
-
 	defer ticker.Stop()
 	defer beta.Restore()
 	for {
@@ -109,141 +106,111 @@ func removeAd(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			mutex.Lock()
-			for wnd := range mainWindowHandleMap {
-				if wnd == 0 {
-					continue
-				}
-				childHandles = childHandles[:0]
-				var handle windows.HWND
-				enumWindow, ok := enumWindowCallbackMap[wnd]
-				if !ok {
-					enumWindow = syscall.NewCallback(func(handle windows.HWND, _ uintptr) uintptr {
-						childHandles = append(childHandles, handle)
-						return 1
-					})
-					enumWindowCallbackMap[wnd] = enumWindow
-				}
-				winapi.EnumChildWindows(wnd, enumWindow, uintptr(unsafe.Pointer(&handle)))
-
-				if !isMainWindow(childHandles) {
-					continue
-				}
-
-				rect := new(winapi.Rect)
-				winapi.GetWindowRect(wnd, rect)
-				for _, childHandle := range childHandles[1:] {
-					className := getWindowClass(childHandle)
-					windowText := getWindowText(childHandle)
-					parentHandle := winapi.GetParent(childHandle)
-					if parentHandle != wnd {
-						continue
-					}
-					parentText := getWindowText(parentHandle)
-
-					if className == "EVA_ChildWindow" && windowText == "" && parentText != "" {
-						hasCustomScroll, ok := customScrollHandleMap[wnd]
-						if !ok {
-							hasCustomScroll = classNameStartsWith(childHandle, "_EVA_")
-							customScrollHandleMap[wnd] = hasCustomScroll
-						}
-						if !hasCustomScroll {
-							winapi.SendMessage(childHandle, winapi.WmClose, 0, 0)
-						}
-					}
-					HideMainViewAdArea(windowText, rect, childHandle)
-					HideLockScreenAdArea(windowText, rect, childHandle)
-				}
-			}
-			for wnd := range adSubwindowCandidateMap {
-				if hasChromeLegacyWindow(wnd) {
-					winapi.ShowWindow(wnd, 0)
-				}
-			}
-			beta.RemoveAds()
-			mutex.Unlock()
+			removeAdsOnce()
 		}
 	}
 }
 
-func classNameStartsWith(handle windows.HWND, className string) bool {
-	childHandles := make([]windows.HWND, 0)
-
-	enumWindow, ok := enumWindowCallbackMap[handle]
-	if !ok {
-		enumWindow = syscall.NewCallback(func(handle windows.HWND, _ uintptr) uintptr {
-			childHandles = append(childHandles, handle)
-			return 1
-		})
-		enumWindowCallbackMap[handle] = enumWindow
-	}
-	winapi.EnumChildWindows(handle, enumWindow, uintptr(unsafe.Pointer(&handle)))
-
-	for _, wnd := range childHandles {
-		if classNameStartsWith(wnd, className) {
-			return true
-		}
-	}
-
-	windowClass := getWindowClass(handle)
-	return strings.HasPrefix(windowClass, className)
-}
-
-func hasChromeLegacyWindow(handle windows.HWND) bool {
-	childHandles := make([]windows.HWND, 0)
-
-	enumWindow, ok := enumWindowCallbackMap[handle]
-	if !ok {
-		enumWindow = syscall.NewCallback(func(handle windows.HWND, _ uintptr) uintptr {
-			childHandles = append(childHandles, handle)
-			return 1
-		})
-		enumWindowCallbackMap[handle] = enumWindow
-	}
-	winapi.EnumChildWindows(handle, enumWindow, uintptr(unsafe.Pointer(&handle)))
-
-	for _, wnd := range childHandles {
-		if hasChromeLegacyWindow(wnd) {
-			return true
-		}
-	}
-
-	windowText := getWindowText(handle)
-	return windowText == "Chrome Legacy Window"
-
-}
-
-func isMainWindow(handles []windows.HWND) bool {
-	for _, wnd := range handles {
-		windowClass := getWindowClass(wnd)
-		if windowClass != "EVA_ChildWindow" {
+func removeAdsOnce() {
+	mutex.Lock()
+	defer mutex.Unlock()
+	for wnd := range mainWindowHandleMap {
+		if !winapi.IsWindow(wnd) {
+			delete(mainWindowHandleMap, wnd)
 			continue
 		}
+		if !winapi.IsWindowVisible(wnd) {
+			continue
+		}
+		// EnumChildWindows visits every descendant. Do not enumerate recursively.
+		children := inspectChildren(wnd)
+		if !isMainWindow(children) {
+			continue
+		}
+		var rect winapi.Rect
+		if !winapi.GetWindowRect(wnd, &rect) {
+			continue
+		}
+		for _, child := range children {
+			if child.parent != wnd {
+				continue
+			}
+			if child.class == "EVA_ChildWindow" && child.text == "" && winapi.GetWindowText(wnd) != "" {
+				if !hasCustomScroll(child.handle, children) {
+					winapi.SendMessage(child.handle, winapi.WmClose, 0, 0)
+				}
+			}
+			HideMainViewAdArea(child.text, &rect, child.handle)
+			HideLockScreenAdArea(child.text, &rect, child.handle)
+		}
+	}
+	for wnd := range adSubwindowCandidateMap {
+		if !winapi.IsWindow(wnd) {
+			delete(adSubwindowCandidateMap, wnd)
+			continue
+		}
+		if !winapi.IsWindowVisible(wnd) {
+			continue
+		}
+		if winapi.GetWindowText(wnd) == "Chrome Legacy Window" || hasChromeLegacyWindow(inspectChildren(wnd)) {
+			winapi.ShowWindow(wnd, 0)
+		}
+	}
+	beta.RemoveAds()
+}
 
-		windowText := winapi.GetWindowText(wnd)
-		if strings.HasPrefix(windowText, "OnlineMainView") || strings.HasPrefix(windowText, "LockModeView") {
+type childWindow struct {
+	handle windows.HWND
+	parent windows.HWND
+	class  string
+	text   string
+}
+
+func inspectChildren(parent windows.HWND) []childWindow {
+	handles := winapi.ChildWindows(parent)
+	children := make([]childWindow, 0, len(handles))
+	for _, handle := range handles {
+		children = append(children, childWindow{handle, winapi.GetParent(handle), winapi.GetClassName(handle), winapi.GetWindowText(handle)})
+	}
+	return children
+}
+
+func isMainWindow(children []childWindow) bool {
+	for _, child := range children {
+		if child.class == "EVA_ChildWindow" && (strings.HasPrefix(child.text, "OnlineMainView") || strings.HasPrefix(child.text, "LockModeView")) {
 			return true
 		}
 	}
 	return false
 }
 
-func getWindowText(handle windows.HWND) string {
-	text, ok := windowTextMap[handle]
-	if !ok {
-		text = winapi.GetWindowText(handle)
-		windowTextMap[handle] = text
+func hasCustomScroll(parent windows.HWND, children []childWindow) bool {
+	// Parent links are local to this pass, so HWND reuse cannot return stale data.
+	parents := make(map[windows.HWND]windows.HWND, len(children))
+	for _, child := range children {
+		parents[child.handle] = child.parent
 	}
-	return text
+	for _, child := range children {
+		if !strings.HasPrefix(child.class, "_EVA_") {
+			continue
+		}
+		for handle, remaining := child.handle, len(children); handle != 0 && remaining > 0; remaining-- {
+			if handle == parent {
+				return true
+			}
+			handle = parents[handle]
+		}
+	}
+	return false
 }
 
-func getWindowClass(handle windows.HWND) string {
-	class, ok := windowClassMap[handle]
-	if !ok {
-		class = winapi.GetClassName(handle)
-		windowClassMap[handle] = class
+func hasChromeLegacyWindow(children []childWindow) bool {
+	for _, child := range children {
+		if child.text == "Chrome Legacy Window" {
+			return true
+		}
 	}
-	return class
+	return false
 }
 
 func Run(ctx context.Context) {

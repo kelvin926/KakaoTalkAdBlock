@@ -17,8 +17,7 @@ func HideLockScreenAdArea(windowText string, rect *winapi.Rect, handle windows.H
 	if strings.HasPrefix(windowText, "LockModeView") {
 		width := rect.Right - rect.Left - LayoutShadowPadding
 		height := rect.Bottom - rect.Top
-		winapi.UpdateWindow(handle)
-		winapi.SetWindowPos(handle, 0, 0, 0, width, height, winapi.SwpNomove)
+		resizeAdArea(handle, width, height)
 	}
 }
 
@@ -29,7 +28,20 @@ func HideMainViewAdArea(windowText string, rect *winapi.Rect, handle windows.HWN
 		if height < 1 {
 			return
 		}
-		winapi.UpdateWindow(handle)
-		winapi.SetWindowPos(handle, 0, 0, 0, width, height, winapi.SwpNomove)
+		resizeAdArea(handle, width, height)
 	}
+}
+
+func resizeAdArea(handle windows.HWND, width, height int32) {
+	if width < 1 || height < 1 {
+		return
+	}
+	var current winapi.Rect
+	if !winapi.GetWindowRect(handle, &current) {
+		return
+	}
+	if current.Right-current.Left == width && current.Bottom-current.Top == height {
+		return
+	}
+	winapi.SetWindowPos(handle, 0, 0, 0, width, height, winapi.SwpNomove|winapi.SwpNozorder|winapi.SwpNoactivate)
 }
