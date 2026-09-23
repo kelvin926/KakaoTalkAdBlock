@@ -298,8 +298,14 @@ func collapseAdWindow(adWindow windows.HWND) {
 	if !winapi.IsWindow(adWindow) {
 		return
 	}
-	winapi.ShowWindow(adWindow, 0)
+	if winapi.IsWindowVisible(adWindow) {
+		winapi.ShowWindow(adWindow, 0)
+	}
 	if !winapi.IsWindow(adWindow) {
+		return
+	}
+	var rect winapi.Rect
+	if !winapi.GetWindowRect(adWindow, &rect) || (rect.Right == rect.Left && rect.Bottom == rect.Top) {
 		return
 	}
 	flags := uint32(winapi.SwpNomove | winapi.SwpNozorder | winapi.SwpNoactivate)

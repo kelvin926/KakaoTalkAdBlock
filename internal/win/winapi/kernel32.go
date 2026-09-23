@@ -26,9 +26,9 @@ var (
 	process32Next            = kernel32.NewProc("Process32Next")
 )
 
-func CreateToolhelp32Snapshot(flags uint32, pid uint32) windows.HWND {
+func CreateToolhelp32Snapshot(flags uint32, pid uint32) windows.Handle {
 	handle, _, _ := createToolhelp32Snapshot.Call(uintptr(flags), uintptr(pid))
-	return windows.HWND(handle)
+	return windows.Handle(handle)
 }
 
 func Process32First(hSnapshot uintptr, pe *ProcessEntry32) bool {
