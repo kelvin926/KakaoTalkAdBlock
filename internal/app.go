@@ -100,7 +100,6 @@ func watch(ctx context.Context) {
 func removeAd(ctx context.Context) {
 	ticker := time.NewTicker(sleepTime)
 	defer ticker.Stop()
-	defer beta.Restore()
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,4 +215,5 @@ func hasChromeLegacyWindow(children []childWindow) bool {
 func Run(ctx context.Context) {
 	go watch(ctx)
 	go removeAd(ctx)
+	go runQtLayoutHelper(ctx)
 }

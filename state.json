@@ -1,0 +1,33 @@
+{
+  "updated_at": "2026-10-22",
+  "goal": "Hide Qt6 advertisements and remove reserved footer layout without cropping the native window.",
+  "status": "verified",
+  "constraints": [
+    "Preserve the existing resource lifetime and discovery polling fixes.",
+    "Keep classic native ad hiding functional without Node/Frida.",
+    "Use portable optional runtime paths and GUI-thread Qt property changes.",
+    "Do not change KakaoTalk files, user data or system network configuration."
+  ],
+  "decisions": [
+    "Recognize owned Qt6 ad windows and the AdFit NAS Advertisement title.",
+    "Remove clipping and frame modifications from the Qt6 ad-hiding path.",
+    "Exclude the verified AdBanner loader and separator from ColumnLayout.",
+    "Bundle or explicitly select Node and Frida; no REA/Codex installation is required.",
+    "Validate x64, Qt 6.10.3 and the component hierarchy before layout changes."
+  ],
+  "verified_results": [
+    "The local prototype expanded the content area to the full window height and moved the lower sidebar icons down.",
+    "The local prototype preserved the native frame and unchanged KakaoTalk process/executable.",
+    "The local prototype cleaned up its old helper and reapplied the layout after blocker restart.",
+    "go test ./... passed, including runtime discovery and existing resource regression tests.",
+    "Windows amd64, 386 and arm64 builds passed.",
+    "JavaScript syntax checks passed for the agent, helper and runtime packaging script.",
+    "The pinned runtime installed with npm ci and the packaging script produced a portable Windows x64 Node/Frida runtime.",
+    "The bundled runtime loaded Frida and resolved the running KakaoTalk executable path with NODE_PATH cleared."
+  ],
+  "active_work": [],
+  "limitations": [
+    "Live layout verification covers KakaoTalk 26.9.0.420 with Qt 6.10.3 on Windows x64."
+  ],
+  "blockers": []
+}

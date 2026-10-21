@@ -1,0 +1,8 @@
+{
+  "name": "kakaotalk-adblock-qt-runtime",
+  "private": true,
+  "description": "Optional Windows x64 Qt layout adapter runtime",
+  "engines": { "node": ">=22" },
+  "dependencies": { "frida": "17.23.2" },
+  "allowScripts": { "frida@17.23.2": true }
+}

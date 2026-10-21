@@ -3,3 +3,5 @@
 *.syso
 *.exe
 *.exe~
+node_modules/
+runtime/state/
