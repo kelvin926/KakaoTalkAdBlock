@@ -97,3 +97,29 @@ Windows build targets and JavaScript syntax. `node scripts/test-qt-helper.mjs`
 uses a fake device to check idle scheduling, target replacement and EOF cleanup;
 it does not attach to any user application. The resource-test host no longer
 has the Qt6 client, so new Qt scheduling is not claimed as live-verified.
+
+## Classic advertisement popups (2026-10-23)
+
+Owned classic `EVA_Window` / `EVA_Window_Dblclk` windows can precede their
+main-window owner in EnumWindows' Z order. Candidate discovery no longer
+depends on the owner already being present in the newly collected main set.
+Only empty-caption classic windows in a verified KakaoTalk process enter this
+candidate path. Being a candidate alone never causes a window to be hidden.
+
+The existing legacy renderer checks remain. A new path accepts a
+`Chrome_WidgetWin_1` with the exact title `MOMENT 광고` or
+`AdFit NAS Advertisement`, whose parent is a collected `Chrome_WidgetWin_0`.
+It does not require `Chrome Legacy Window`, which is absent from the observed
+classic Chromium ad tree with an `Intermediate D3D Window` renderer.
+No notification setting is disabled and screen position alone is not used.
+The same coalesced window events drive detection, without another timer or
+helper process.
+
+Regression checks cover owned popups preceding their owner, both ad titles,
+ordinary browser content, mismatched host parents, and native controls with
+matching text. Go tests and the Windows amd64 build passed. On the running
+classic client, the observed owned `MOMENT 광고` container changed from visible
+to hidden while the main rectangle, style, region, app PID and startup entry
+were preserved. That container had zero geometry before this change; an actual
+intermittent bottom-right popup was not visibly reproduced during verification.
+These results validate the detection fix, not every future popup format.

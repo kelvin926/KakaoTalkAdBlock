@@ -63,15 +63,7 @@ func watch(ctx context.Context, signals *activitySignals) {
 		beta.TrackWindow(handle, className, parentHandle)
 		if className == "EVA_Window_Dblclk" || className == "EVA_Window" {
 			windowText := winapi.GetWindowText(handle)
-			if className == "EVA_Window_Dblclk" && windowText != "" && parentHandle == 0 {
-				nextMain[handle] = struct{}{}
-			} else if windowText == "" {
-				if className == "EVA_Window" && parentHandle == 0 {
-					nextAds[handle] = struct{}{}
-				} else if _, ok := nextMain[parentHandle]; ok {
-					nextAds[handle] = struct{}{}
-				}
-			}
+			trackClassicWindow(childWindow{handle, parentHandle, className, windowText}, nextMain, nextAds)
 		}
 		return 1
 	})
@@ -189,7 +181,8 @@ func removeAdsOnce() {
 		if !winapi.IsWindowVisible(wnd) {
 			continue
 		}
-		if winapi.GetWindowText(wnd) == "Chrome Legacy Window" || hasChromeLegacyWindow(inspectChildren(wnd)) {
+		children := inspectChildren(wnd)
+		if winapi.GetWindowText(wnd) == "Chrome Legacy Window" || hasChromeLegacyWindow(children) || hasChromiumAdvertisement(children) {
 			winapi.ShowWindow(wnd, 0)
 		}
 	}
@@ -201,6 +194,37 @@ type childWindow struct {
 	parent windows.HWND
 	class  string
 	text   string
+}
+
+func trackClassicWindow(window childWindow, main, ads map[windows.HWND]struct{}) {
+	if window.class != "EVA_Window_Dblclk" && window.class != "EVA_Window" {
+		return
+	}
+	if window.class == "EVA_Window_Dblclk" && window.text != "" && window.parent == 0 {
+		main[window.handle] = struct{}{}
+	} else if window.text == "" {
+		// EnumWindows includes owned popups, usually before their owner in Z order.
+		// Collect candidates independently; browser/ad validation happens below.
+		ads[window.handle] = struct{}{}
+	}
+}
+
+func hasChromiumAdvertisement(children []childWindow) bool {
+	hosts := make(map[windows.HWND]struct{})
+	for _, child := range children {
+		if child.class == "Chrome_WidgetWin_0" {
+			hosts[child.handle] = struct{}{}
+		}
+	}
+	for _, child := range children {
+		if child.class != "Chrome_WidgetWin_1" || child.text != "MOMENT 광고" && child.text != "AdFit NAS Advertisement" {
+			continue
+		}
+		if _, ok := hosts[child.parent]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectChildren(parent windows.HWND) []childWindow {

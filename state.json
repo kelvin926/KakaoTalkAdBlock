@@ -1,7 +1,7 @@
 {
   "updated_at": "2026-10-23",
-  "goal": "Minimize idle CPU, wakeups and memory while preserving native ad hiding and guarded Qt6 full-height layout.",
-  "status": "verified_classic_resource_update",
+  "goal": "Hide classic owned advertisement popups without suppressing ordinary notifications or increasing idle polling.",
+  "status": "verified_popup_detection_with_reproduction_limit",
   "constraints": [
     "Preserve the existing resource lifetime and discovery polling fixes.",
     "Keep classic native ad hiding functional without Node/Frida.",
@@ -17,7 +17,10 @@
     "Coalesce relevant window events for 50 ms, retain 30-second health discovery and a 2-second fallback when hook registration fails.",
     "Only start the optional Qt helper for discovered Qt PIDs and send target updates over parent-owned stdin.",
     "Use bounded startup retries and temporary GUI hooks instead of permanent timers/DispatchMessage interception; bound metadata and deduplicate status writes.",
-    "Allow ignored runtime/paths.json for shared local runtimes, with environment overrides taking precedence."
+    "Allow ignored runtime/paths.json for shared local runtimes, with environment overrides taking precedence.",
+    "Collect owned classic popup candidates without depending on owner enumeration order.",
+    "Recognize exact Chromium ad titles with matching host parentage even when Chrome Legacy Window is absent.",
+    "Preserve ordinary notifications and reuse existing event activity; do not filter by screen position alone."
   ],
   "verified_results": [
     "The local prototype expanded the content area to the full window height and moved the lower sidebar icons down.",
@@ -32,13 +35,18 @@
     "Real WinEvent delivery, cancellation/unhook and lazy helper startup checks passed.",
     "Fake-device helper tests passed for idle scheduling, target recreation and EOF restore/unload/detach.",
     "Classic KakaoTalk 26.9.0.5337: live content resize corrected within 77 ms while preserving main frame/region, app PID and startup path.",
-    "Installed blocker plus helper idle CPU changed from 5.5003% to 0.0520% of one core; private memory from 163.83 to 49.00 MiB; no helper runs with classic KakaoTalk."
+    "Installed blocker plus helper idle CPU changed from 5.5003% to 0.0520% of one core; private memory from 163.83 to 49.00 MiB; no helper runs with classic KakaoTalk.",
+    "2026-10-23 popup update: go test ./... and Windows amd64 build passed.",
+    "Regression checks cover owner enumeration order and positive/negative Chromium ad identities.",
+    "Live classic owned MOMENT advertisement container became hidden; main rectangle/style/region, app PID and startup path stayed unchanged.",
+    "No new helper process or polling timer was added."
   ],
   "active_work": [],
   "limitations": [
     "Live layout verification covers KakaoTalk 26.9.0.420 with Qt 6.10.3 on Windows x64.",
     "Qt6 is no longer installed on the resource-test host. New scheduling was tested with a fake device; the prior live Qt layout result is historical.",
-    "Measured improvement includes bringing existing fork resource fixes into the older local installation."
+    "Measured improvement includes bringing existing fork resource fixes into the older local installation.",
+    "The popup update hid an observed zero-geometry ad container. An actual intermittent bottom-right popup was not visibly reproduced; normal incoming notification behavior was not generated live."
   ],
   "blockers": [],
   "measurements": {
@@ -52,5 +60,18 @@
     "private_reduction_percent": 70.09,
     "node_helpers_after": 0,
     "scope": "Local installed legacy build versus optimized build, classic KakaoTalk open. Short normalized idle samples; no battery-runtime or long-duration leak claim."
+  },
+  "popup_detection": {
+    "observed_client": "classic 26.9.0.5337",
+    "observed_renderer": "Intermediate D3D Window, no Chrome Legacy Window",
+    "observed_ad_container_hidden": true,
+    "intermittent_corner_popup_visibly_reproduced": false,
+    "checks": [
+      "owned popup before owner",
+      "ad title and host matching",
+      "ordinary web/native content excluded",
+      "Go tests",
+      "Windows amd64 build"
+    ]
   }
 }

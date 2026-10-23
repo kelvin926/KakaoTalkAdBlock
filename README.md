@@ -13,6 +13,12 @@ a 30-second safety scan instead of continuously scanning every 100 ms.
 Classic KakaoTalk starts no Node/Frida helper. See the implementation and
 measurement limits in [resource notes](docs/resource-fix.md).
 
+Classic popup discovery includes owned windows even when they precede the main
+window. Chromium advertisements titled `MOMENT 광고` or `AdFit NAS Advertisement`
+can be hidden without the old `Chrome Legacy Window` renderer marker. The new
+path checks the browser host hierarchy; screen position alone is not a rule.
+Ordinary native message notifications are left alone.
+
 Right-click the tray icon to quit, or to check for new versions.
 
 Qt6 clients can display the main banner in a separate owned window. This fork

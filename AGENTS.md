@@ -5,6 +5,8 @@
 - Start Node/Frida only when a Qt6 process exists and reuse native PID discovery.
 - Keep metadata bounded and skip unchanged diagnostics; avoid permanent GUI hooks.
 - Preserve classic KakaoTalk ad hiding while improving the Qt6 path.
+- Collect classic owned ad candidates independently of owner discovery order.
+- New Chromium popup detection requires an exact ad title and matching browser host; do not hide ordinary notification windows by position alone.
 - Qt6 ads can be owned top-level windows; distinguish owners from child windows.
 - Validate ad-specific Qt/Chromium structure before hiding a native window.
 - Do not crop the main window or strip its frame to remove footer space.

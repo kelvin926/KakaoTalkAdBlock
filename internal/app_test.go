@@ -65,3 +65,44 @@ func TestWatchCancellation(t *testing.T) {
 		t.Fatal("watch ignored cancellation")
 	}
 }
+
+func TestOwnedPopupBeforeMainWindow(t *testing.T) {
+	main, ads := make(map[windows.HWND]struct{}), make(map[windows.HWND]struct{})
+	// Owned popups can precede their owner in EnumWindows' Z order.
+	trackClassicWindow(childWindow{2, 1, "EVA_Window_Dblclk", ""}, main, ads)
+	trackClassicWindow(childWindow{3, 1, "EVA_Window", ""}, main, ads)
+	trackClassicWindow(childWindow{1, 0, "EVA_Window_Dblclk", "카카오톡"}, main, ads)
+	trackClassicWindow(childWindow{4, 0, "EVA_Window_Dblclk", "Chat"}, main, ads)
+	trackClassicWindow(childWindow{5, 1, "tooltips_class32", ""}, main, ads)
+	if len(main) != 2 || len(ads) != 2 {
+		t.Fatalf("unexpected discovery: main=%v ads=%v", main, ads)
+	}
+	if _, ok := ads[2]; !ok {
+		t.Fatal("owned advertisement candidate lost before owner discovery")
+	}
+}
+
+func TestChromiumPopupRequiresAdvertisementIdentity(t *testing.T) {
+	for _, title := range []string{"MOMENT 광고", "AdFit NAS Advertisement"} {
+		children := []childWindow{
+			{handle: 3, parent: 2, class: "Chrome_WidgetWin_1", text: title},
+			{handle: 2, parent: 1, class: "Chrome_WidgetWin_0"},
+			{handle: 4, parent: 3, class: "Intermediate D3D Window"},
+		}
+		if !hasChromiumAdvertisement(children) {
+			t.Fatalf("advertisement without legacy renderer missed: %s", title)
+		}
+		children[0].text = "Message preview"
+		if hasChromiumAdvertisement(children) {
+			t.Fatal("ordinary web content classified as an advertisement")
+		}
+		children[0].text, children[0].parent = title, 9
+		if hasChromiumAdvertisement(children) {
+			t.Fatal("unrelated Chromium host accepted")
+		}
+		children[0].parent, children[0].class = 2, "STATIC"
+		if hasChromiumAdvertisement(children) {
+			t.Fatal("native notification with matching text accepted")
+		}
+	}
+}
