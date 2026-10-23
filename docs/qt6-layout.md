@@ -55,12 +55,19 @@ Exclude the generated `runtime/state/` directory from distribution. Quit the
 old blocker through its tray menu before upgrading. If an older blocker was
 force-killed while clipping the window, restarting KakaoTalk restores its frame.
 
-The Go program embeds the adapter scripts, starts one hidden helper, and owns
-its stdin pipe. On shutdown or parent exit the helper restores the visibility
+The Go program embeds the adapter scripts and starts one hidden helper only
+while Qt6 target processes exist. Classic KakaoTalk starts no Node process.
+The parent owns its stdin pipe and supplies discovered target PIDs and window
+change notifications; the helper does not enumerate all processes again.
+On shutdown or parent exit the helper restores the visibility
 values it changed, unloads instrumentation and detaches. The helper watches for
 KakaoTalk process recreation and the adapter discovers current layout objects
 afresh rather than keeping stale QObject pointers. `runtime/state/layout-status.json`
-records readiness and geometry without message content.
+records changed readiness and geometry without message content. Unchanged
+status is not rewritten. The agent uses a temporary GUI dispatch hook only
+while an operation is pending, with a one-second timeout, and bounds its caches.
+After bounded startup retries, window events and the parent's 30-second safety
+scan drive checks. There is no permanent one-second layout polling timer.
 
 ## Existing runtime overrides
 
@@ -74,6 +81,10 @@ be selected for this process using these optional environment variables:
 - `KAKAOTALK_ADBLOCK_STATE_DIR`: writable adapter/status directory.
 
 No personal account path, Codex installation, or REA installation is required.
+For a shared local runtime, `runtime/paths.json` can alternatively specify
+`node`, `fridaModule`, and `stateDirectory` string fields. Relative paths are
+resolved against `runtime/`; environment overrides take precedence. This
+machine-specific file is ignored by Git and should not be distributed.
 If the optional runtime is absent, native ad-window hiding continues and the
 footer remains until the layout runtime is configured.
 
@@ -92,6 +103,13 @@ These live results establish the layout mechanism used by the local prototype.
 Repository checks additionally cover portable runtime discovery, the existing
 resource regressions, JavaScript syntax and Windows build targets. They do not
 establish support for other Qt versions or ARM64/x86 Qt clients.
+
+The later resource optimization was exercised with classic KakaoTalk
+`26.9.0.5337`. The Qt client was no longer installed on that host, so its new
+helper scheduling was checked with a fake device protocol/lifetime test
+(`node scripts/test-qt-helper.mjs`) and JavaScript syntax checks. The original
+Qt layout discovery and ABI guards are retained; these checks do not replace
+a new live Qt layout check.
 
 The adapter validates x64, Qt 6.10.3, the installed child-list getter and the
 specific component hierarchy. Unsupported layouts are left untouched; there

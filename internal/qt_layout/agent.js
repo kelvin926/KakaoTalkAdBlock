@@ -31,6 +31,7 @@ function typeOf(object) {
   const address = object.readPointer().readPointer();
   let call = metaFunctions.get(address.toString());
   if (!call) {
+    if (metaFunctions.size >= 64) metaFunctions.clear();
     call = new NativeFunction(address, 'pointer', ['pointer']);
     metaFunctions.set(address.toString(), call);
   }
@@ -107,29 +108,49 @@ const enumCallback = new NativeCallback(window => {
 const originals = new Map();
 let pending = false;
 let restoring = false;
-let restoreDone = null;
+let pendingRequest = null;
+let completeRequest = null;
+let hook = null;
+let deadline;
 let lastSignature = '';
 let lastStatus = { state: 'waiting-for-main-window', qtVersion };
 function requestGui() {
+  if (pendingRequest) return pendingRequest;
   wakeWindow = nullPointer;
   enumWindows(enumCallback, nullPointer);
-  if (wakeWindow.isNull()) return;
+  if (wakeWindow.isNull()) return Promise.resolve(lastStatus);
   pending = true;
+  pendingRequest = new Promise(resolve => { completeRequest = resolve; });
+  const result = pendingRequest;
+  hook = Interceptor.attach(user.getExportByName('DispatchMessageW'), { onEnter: onGuiMessage });
+  deadline = setTimeout(finishRequest, 1000);
   post(wakeWindow, 0, nullPointer, nullPointer);
+  return result;
 }
-const hook = Interceptor.attach(user.getExportByName('DispatchMessageW'), {
-  onEnter() {
+function finishRequest() {
+  pending = false;
+  if (hook) { hook.detach(); hook = null; }
+  clearTimeout(deadline);
+  const resolve = completeRequest;
+  completeRequest = pendingRequest = null;
+  if (resolve) resolve(lastStatus);
+}
+function onGuiMessage() {
     if (!pending || this.threadId !== guiThread) return;
     pending = false;
+    // Instrument only this requested GUI operation, never every idle message.
+    if (hook) { hook.detach(); hook = null; }
     try {
       const layouts = findLayouts();
+      const current = new Set(layouts.flatMap(layout => [layout.loader.toString(), layout.separator.toString()]));
+      for (const key of originals.keys()) if (!current.has(key)) originals.delete(key);
       for (const layout of layouts) {
         for (const item of [layout.loader, layout.separator]) {
           const key = item.toString();
           if (restoring) {
             if (originals.has(key)) setVisible(item, originals.get(key));
           } else {
-            if (!originals.has(key)) originals.set(key, visible(item));
+            if (!originals.has(key) && originals.size < 64) originals.set(key, visible(item));
             if (visible(item)) setVisible(item, 0);
           }
         }
@@ -152,23 +173,17 @@ const hook = Interceptor.attach(user.getExportByName('DispatchMessageW'), {
         send({ kind: 'layout-status', ...lastStatus });
       }
     } catch (error) {
+      lastStatus = { state: 'layout-error', error: String(error), qtVersion };
       send({ kind: 'layout-error', error: String(error) });
     }
-    if (restoring && restoreDone) {
-      const resolve = restoreDone;
-      restoreDone = null;
-      resolve(lastStatus);
-    }
-  },
-});
-const timer = setInterval(() => { if (!restoring) requestGui(); }, 1000);
+    finishRequest();
+}
 rpc.exports = {
   status() { return lastStatus; },
+  ensure() { return restoring ? lastStatus : requestGui(); },
   restore() {
     restoring = true;
-    clearInterval(timer);
-    return new Promise(resolve => { restoreDone = resolve; requestGui(); });
+    return requestGui();
   },
 };
 send({ kind: 'layout-agent-ready', qtVersion, pid: Process.id });
-requestGui();

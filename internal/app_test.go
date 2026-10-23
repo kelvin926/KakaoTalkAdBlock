@@ -56,7 +56,7 @@ func TestWindowClassification(t *testing.T) {
 func TestWatchCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { watch(ctx); close(done) }()
+	go func() { watch(ctx, newActivitySignals()); close(done) }()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	select {

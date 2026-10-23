@@ -5,3 +5,4 @@
 *.exe~
 node_modules/
 runtime/state/
+runtime/paths.json

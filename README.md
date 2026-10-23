@@ -8,6 +8,11 @@ AdBlocker for KakaoTalk Windows client.
 
 This program runs in the background.
 
+Ad removal responds to window creation, display and geometry changes, with
+a 30-second safety scan instead of continuously scanning every 100 ms.
+Classic KakaoTalk starts no Node/Frida helper. See the implementation and
+measurement limits in [resource notes](docs/resource-fix.md).
+
 Right-click the tray icon to quit, or to check for new versions.
 
 Qt6 clients can display the main banner in a separate owned window. This fork

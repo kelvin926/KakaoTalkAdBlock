@@ -4,6 +4,7 @@ import (
 	"context"
 	"kakaotalkadblock/internal/beta"
 	"kakaotalkadblock/internal/win/winapi"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -13,8 +14,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const sleepTime = 100 * time.Millisecond
+const eventDebounce = 50 * time.Millisecond
 const discoveryInterval = 2 * time.Second
+const eventHealthInterval = 30 * time.Second
 const executable = "kakaotalk.exe"
 
 var mutex sync.Mutex
@@ -22,8 +24,8 @@ var mainWindowHandleMap = make(map[windows.HWND]struct{})
 var adSubwindowCandidateMap = make(map[windows.HWND]struct{})
 
 // Each snapshot is owned by this call, including empty/failed enumerations.
-func kakaoProcessIDs() map[uint32]struct{} {
-	ids := make(map[uint32]struct{})
+func kakaoProcessIDs() map[uint32]bool {
+	ids := make(map[uint32]bool)
 	snapshot := winapi.CreateToolhelp32Snapshot(winapi.Th32csSnapprocess, 0)
 	if snapshot == 0 || snapshot == windows.InvalidHandle {
 		return ids
@@ -37,7 +39,7 @@ func kakaoProcessIDs() map[uint32]struct{} {
 	for {
 		name := windows.ByteSliceToString(entry.SzExeFile[:])
 		if strings.EqualFold(name, executable) || beta.IsExecutable(name) {
-			ids[entry.Th32ProcessID] = struct{}{}
+			ids[entry.Th32ProcessID] = beta.IsExecutable(name)
 		}
 		if !winapi.Process32Next(uintptr(snapshot), &entry) {
 			break
@@ -46,8 +48,8 @@ func kakaoProcessIDs() map[uint32]struct{} {
 	return ids
 }
 
-func watch(ctx context.Context) {
-	var processIDs map[uint32]struct{}
+func watch(ctx context.Context, signals *activitySignals) {
+	var processIDs map[uint32]bool
 	var nextMain, nextAds map[windows.HWND]struct{}
 	// One callback per watcher, never one per window or polling iteration.
 	enumWindow := syscall.NewCallback(func(handle windows.HWND, _ uintptr) uintptr {
@@ -73,13 +75,26 @@ func watch(ctx context.Context) {
 		}
 		return 1
 	})
-	ticker := time.NewTicker(discoveryInterval)
+	interval := discoveryInterval
+	if signals.eventDriven {
+		interval = eventHealthInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		processIDs = kakaoProcessIDs()
+		signals.processes.Store(processIDs)
+		qtTargets := make([]uint32, 0)
+		for pid, isQt := range processIDs {
+			if isQt {
+				qtTargets = append(qtTargets, pid)
+			}
+		}
+		sort.Slice(qtTargets, func(i, j int) bool { return qtTargets[i] < qtTargets[j] })
+		replaceQtTargets(signals.qtTargets, qtTargets)
 		nextMain = make(map[windows.HWND]struct{})
 		nextAds = make(map[windows.HWND]struct{})
 		if len(processIDs) != 0 {
@@ -89,22 +104,45 @@ func watch(ctx context.Context) {
 		// Replace sets so closed windows and reused HWNDs do not accumulate.
 		mainWindowHandleMap, adSubwindowCandidateMap = nextMain, nextAds
 		mutex.Unlock()
+		notify(signals.work)
+		notify(signals.layout)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-signals.rescan:
+			timer := time.NewTimer(eventDebounce)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-signals.rescan:
+			default:
+			}
 		}
 	}
 }
 
-func removeAd(ctx context.Context) {
-	ticker := time.NewTicker(sleepTime)
-	defer ticker.Stop()
+func removeAd(ctx context.Context, changes <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-changes:
+			timer := time.NewTimer(eventDebounce)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-changes:
+			default:
+			}
 			removeAdsOnce()
 		}
 	}
@@ -213,7 +251,17 @@ func hasChromeLegacyWindow(children []childWindow) bool {
 }
 
 func Run(ctx context.Context) {
-	go watch(ctx)
-	go removeAd(ctx)
-	go runQtLayoutHelper(ctx)
+	signals := newActivitySignals()
+	go func() {
+		ready := make(chan bool, 1)
+		go winapi.WatchWindowEvents(ctx, winapi.WinEventSkipOwnProcess, signals.onWindowEvent, ready)
+		select {
+		case signals.eventDriven = <-ready:
+		case <-ctx.Done():
+			return
+		}
+		go watch(ctx, signals)
+		go removeAd(ctx, signals.work)
+		go runQtLayoutHelper(ctx, signals.qtTargets, signals.layout)
+	}()
 }

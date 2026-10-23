@@ -33,7 +33,7 @@ func TestWatchResourceProbe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
-	go func() { watch(ctx); close(done) }()
+	go func() { watch(ctx, newActivitySignals()); close(done) }()
 	time.Sleep(time.Second)
 	h0, c0 := measure()
 	start := time.Now()
